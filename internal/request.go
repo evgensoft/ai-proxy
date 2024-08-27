@@ -98,6 +98,8 @@ func Req(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	fmt.Printf("Response: %s\n", string(resp))
+
 	w.Write(resp)
 
 	return

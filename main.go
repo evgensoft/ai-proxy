@@ -1,26 +1,19 @@
 package main
 
 import (
+	_ "embed"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"ai-proxy/internal"
 
 	"gopkg.in/yaml.v3"
 )
 
-func handleHTTP(w http.ResponseWriter, req *http.Request) {
-	log.Println(req.RemoteAddr, req.Method, req.RequestURI, req.Proto, req.UserAgent())
-
-	startTime := time.Now()
-
-	internal.Req(w, req)
-
-	log.Println("Latency", time.Since(startTime))
-}
+//go:embed config.yaml
+var configBytes []byte
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -52,16 +45,28 @@ func main() {
 	port := flag.Int("port", 8080, "Port to listen on")
 	flag.Parse()
 
-	b, _ := yaml.Marshal(internal.ProvidersMap)
+	var config internal.Config
 
-	fmt.Println(string(b))
+	err := yaml.Unmarshal(configBytes, &config)
+	if err != nil {
+		log.Fatalf("Error Unmarshal config: %v", err)
+	}
+
+	for _, v := range config.Models {
+		fmt.Println("Load model ", v.Name)
+	}
 
 	log.Printf("Listening on port %d", *port)
+
+	handler, err := internal.NewProxyHandler(config)
+	if err != nil {
+		log.Fatalf("Error creating proxy handler: %v", err)
+	}
 
 	mux := http.NewServeMux()
 	// Register the middleware
 	// mux.HandleFunc("/", authMiddleware(handleHTTP))
-	mux.HandleFunc("/", handleHTTP)
+	mux.Handle("/", handler)
 	mux.HandleFunc("/ping", ping)
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), mux))

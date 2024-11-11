@@ -2,6 +2,7 @@ package main
 
 import (
 	_ "embed"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -14,6 +15,12 @@ import (
 
 //go:embed config.yaml
 var configBytes []byte
+
+// var config internal.Config
+
+type Config struct {
+	Models []internal.Model `yaml:"models"`
+}
 
 func authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -40,34 +47,51 @@ func ping(w http.ResponseWriter, req *http.Request) {
 	w.Write([]byte("OK"))
 }
 
+func listModels(w http.ResponseWriter, req *http.Request) {
+	var models []string
+
+	for _, v := range internal.Models {
+		models = append(models, v.Name)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(models)
+}
+
 func main() {
 	// Define a flag for the port
 	port := flag.Int("port", 8080, "Port to listen on")
 	flag.Parse()
 
-	var config internal.Config
+	var config Config
 
 	err := yaml.Unmarshal(configBytes, &config)
 	if err != nil {
 		log.Fatalf("Error Unmarshal config: %v", err)
 	}
 
+	internal.RateLimits = make(map[string]*internal.RateLimit)
+
 	for _, v := range config.Models {
-		fmt.Println("Load model ", v.Name)
+		internal.Models = append(internal.Models, v)
+		internal.RateLimits[v.Name] = &internal.RateLimit{}
+		log.Println("Load model ", v.Name)
 	}
 
 	log.Printf("Listening on port %d", *port)
 
-	handler, err := internal.NewProxyHandler(config)
-	if err != nil {
-		log.Fatalf("Error creating proxy handler: %v", err)
-	}
+	// handler, err := internal.NewProxyHandler(config)
+	// if err != nil {
+	// 	log.Fatalf("Error creating proxy handler: %v", err)
+	// }
 
 	mux := http.NewServeMux()
 	// Register the middleware
 	// mux.HandleFunc("/", authMiddleware(handleHTTP))
-	mux.Handle("/", handler)
+	mux.HandleFunc("/", internal.HandlerTxt)
+	mux.HandleFunc("/image", internal.HandlerImage)
 	mux.HandleFunc("/ping", ping)
+	mux.HandleFunc("/models", listModels)
 
 	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", *port), mux))
 }

@@ -2,38 +2,26 @@ package openai
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 
-	"ai-proxy/internal/schema"
+	"github.com/tidwall/sjson"
 )
 
-func CreateRequest(providerURL, model, token string, reqBody schema.RequestOpenAICompatable) (*http.Request, error) {
-	reqBody.Model = model
-
-	jsonBody, err := json.Marshal(reqBody)
+func Call(providerURL, model, token string, requestBody []byte) ([]byte, error) {
+	reqBody, err := sjson.SetBytes(requestBody, "model", model)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error in sjson.SetBytes: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, providerURL, bytes.NewReader(jsonBody))
+	req, err := http.NewRequest(http.MethodPost, providerURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
-
-	return req, nil
-}
-
-func Call(providerURL, model, token string, reqBody schema.RequestOpenAICompatable) ([]byte, error) {
-	req, err := CreateRequest(providerURL, model, token, reqBody)
-	if err != nil {
-		return nil, err
-	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

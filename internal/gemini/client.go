@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -104,7 +105,14 @@ func CreateRequest(providerURL, model, token string, reqBody schema.RequestOpenA
 	return http.NewRequest(http.MethodPost, providerURL, bytes.NewReader(jsonBody))
 }
 
-func Call(providerURL, model, token string, reqBody schema.RequestOpenAICompatable) ([]byte, error) {
+func Call(providerURL, model, token string, reqBody []byte) ([]byte, error) {
+	var requestBody schema.RequestOpenAICompatable
+
+	err := json.Unmarshal(reqBody, &requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("error in json.Unmarshal: %w", err)
+	}
+
 	// Выполняем запросы в 1 поток
 	queue <- struct{}{}
 	defer func() {
@@ -119,7 +127,7 @@ func Call(providerURL, model, token string, reqBody schema.RequestOpenAICompatab
 		time.Sleep(time.Until(lastTimeRequest.Add(maxTimeoutTime)))
 	}
 
-	req, err := CreateRequest(providerURL, model, token, reqBody)
+	req, err := CreateRequest(providerURL, model, token, requestBody)
 	if err != nil {
 		return nil, err
 	}
@@ -131,9 +139,18 @@ func Call(providerURL, model, token string, reqBody schema.RequestOpenAICompatab
 
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return body, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
 	var response ResponceGenerated
 
-	err = json.NewDecoder(resp.Body).Decode(&response)
+	err = json.Unmarshal(body, &response)
 	if err != nil {
 		return nil, err
 	}

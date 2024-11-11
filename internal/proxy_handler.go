@@ -1,8 +1,10 @@
 package internal
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -13,6 +15,8 @@ import (
 	"ai-proxy/internal/gemini"
 	"ai-proxy/internal/openai"
 	"ai-proxy/internal/schema"
+
+	"github.com/tidwall/gjson"
 )
 
 type RateLimit struct {
@@ -22,6 +26,8 @@ type RateLimit struct {
 	lastMinute  time.Time
 	lastHour    time.Time
 	lastDay     time.Time
+	lastRequest time.Time
+	mux         sync.Mutex // Fine-grained locking for each rate limit
 }
 
 type Model struct {
@@ -34,62 +40,55 @@ type Model struct {
 	URL              string `yaml:"url"`
 	Token            string `yaml:"token"`
 	MaxRequestLength int    `yaml:"max_request_length"`
+	Size             string `yaml:"model_size"`
 }
 
-type Config struct {
-	Models []Model `yaml:"models"`
-}
-type ProxyHandler struct {
-	config     Config
-	rateLimits map[string]*RateLimit
-	mu         sync.Mutex
-}
+var (
+	RateLimits map[string]*RateLimit
+	Models     []Model
+)
 
-func NewProxyHandler(config Config) (*ProxyHandler, error) {
-	rateLimits := make(map[string]*RateLimit)
-	for _, model := range config.Models {
-		rateLimits[model.Name] = &RateLimit{
-			lastMinute: time.Now(),
-			lastHour:   time.Now(),
-			lastDay:    time.Now(),
-		}
-	}
-
-	return &ProxyHandler{
-		config:     config,
-		rateLimits: rateLimits,
-	}, nil
-}
-
-func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func HandlerTxt(w http.ResponseWriter, req *http.Request) {
 	var (
-		requestBody schema.RequestOpenAICompatable
-		response    []byte
-		err         error
+		modelName, modelSize string
+		response             []byte
+		err                  error
 	)
 
-	log.Printf("Request: %s %s\n", r.Method, r.URL.Path)
-
-	err = json.NewDecoder(r.Body).Decode(&requestBody)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if req.Method != http.MethodPost || !strings.Contains(req.RequestURI, "chat/completions") {
+		http.Error(w, "", http.StatusServiceUnavailable)
 
 		return
 	}
 
-	log.Printf("Request: %s\n", printFirstChars(requestBody.Messages[0].Content))
+	reqBodyBytes, err := io.ReadAll(req.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 
-	if requestBody.Model == "" {
-		for range 3 {
-			requestBody.Model = h.selectModel(calculateRequestLength(requestBody))
-			if requestBody.Model == "" {
+		return
+	}
+
+	modelName = gjson.GetBytes(reqBodyBytes, "model").String()
+
+	if len(modelName) < 10 {
+		if modelName != "BIG" {
+			modelSize = "SMALL"
+		} else {
+			modelSize = "BIG"
+		}
+
+		for i := 0; i < 5; i++ {
+			modelName = selectModel(modelSize, len(reqBodyBytes))
+			if modelName == "" {
+				log.Printf("No available models for this request length = %d", len(reqBodyBytes))
 				http.Error(w, "No available models for this request length", http.StatusServiceUnavailable)
 
 				return
 			}
 
-			response, err = h.sendRequestToLLM(requestBody.Model, requestBody)
+			response, err = sendRequestToLLM(modelName, reqBodyBytes)
 			if err != nil {
+				setMaxLimitMinute(modelName) // set max minuteCount for pause after error
 				log.Printf("Error sending request to LLM: %v", err)
 
 				continue
@@ -98,50 +97,66 @@ func (h *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	} else {
-		response, err = h.sendRequestToLLM(requestBody.Model, requestBody)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-
-			return
-		}
+		response, err = sendRequestToLLM(modelName, reqBodyBytes)
 	}
 
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	w.Write(response)
 }
 
-func (h *ProxyHandler) selectModel(requestLength int) string {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func setMaxLimitMinute(modelName string) {
+	var model Model
 
-	now := time.Now()
-	availableModels := make([]Model, 0)
+	for _, m := range Models {
+		if m.Name == modelName {
+			model = m
 
-	for _, model := range h.config.Models {
-		limit := h.rateLimits[model.Name]
-
-		if now.Sub(limit.lastMinute) >= time.Minute {
-			limit.minuteCount = 0
-			limit.lastMinute = now
-		}
-
-		if now.Sub(limit.lastHour) >= time.Hour {
-			limit.hourCount = 0
-			limit.lastHour = now
-		}
-
-		if now.Sub(limit.lastDay) >= 24*time.Hour {
-			limit.dayCount = 0
-			limit.lastDay = now
-		}
-
-		if limit.minuteCount < model.RequestsPerMin &&
-			limit.dayCount < model.RequestsPerDay &&
-			requestLength <= model.MaxRequestLength {
-			availableModels = append(availableModels, model)
+			break
 		}
 	}
 
+	limit := RateLimits[modelName]
+
+	limit.mux.Lock()
+	defer limit.mux.Unlock()
+
+	limit.minuteCount = model.RequestsPerMin + 1
+	limit.lastMinute = time.Now()
+}
+
+func selectModel(modelSize string, requestLength int) string {
+	availableModels := make([]Model, 0, len(Models))
+
+	for _, model := range Models {
+		if model.Size != modelSize {
+			continue
+		}
+
+		if requestLength > model.MaxRequestLength {
+			continue
+		}
+
+		limit := RateLimits[model.Name]
+		limit.mux.Lock() // Lock individual rate limit
+
+		if limit.minuteCount < model.RequestsPerMin &&
+			limit.hourCount < model.RequestsPerHour &&
+			limit.dayCount < model.RequestsPerDay {
+			availableModels = append(availableModels, model)
+		}
+
+		limit.mux.Unlock()
+	}
+
 	if len(availableModels) == 0 {
+		log.Printf("No available models %s for this request length = %d", modelSize, requestLength)
+
 		return ""
 	}
 
@@ -150,23 +165,53 @@ func (h *ProxyHandler) selectModel(requestLength int) string {
 		if availableModels[i].Priority != availableModels[j].Priority {
 			return availableModels[i].Priority < availableModels[j].Priority
 		}
-		// If Priority is the same, sort by lastMinute
-		return h.rateLimits[availableModels[i].Name].minuteCount < h.rateLimits[availableModels[j].Name].minuteCount
+		// If Priority is the same, sort by lastRequest
+		return RateLimits[availableModels[i].Name].lastRequest.Before(RateLimits[availableModels[j].Name].lastRequest)
 	})
 
 	selectedModel := availableModels[0]
 
-	limit := h.rateLimits[selectedModel.Name]
-	limit.minuteCount++
-	limit.hourCount++
-	limit.dayCount++
-
 	return selectedModel.Name
 }
 
-func (h *ProxyHandler) getModelByName(name string) (Model, bool) {
-	for _, model := range h.config.Models {
-		if model.Name == name {
+func updateLimitCounters(limit *RateLimit, now time.Time) {
+	if now.Sub(limit.lastMinute) >= time.Minute {
+		limit.minuteCount = 0
+		limit.lastMinute = now
+	}
+
+	if now.Sub(limit.lastHour) >= time.Hour {
+		limit.hourCount = 0
+		limit.lastHour = now
+	}
+
+	if now.Sub(limit.lastDay) >= 24*time.Hour {
+		limit.dayCount = 0
+		limit.lastDay = now
+	}
+}
+
+func incrementRateLimit(modelName string) {
+	limit := RateLimits[modelName]
+
+	limit.mux.Lock()
+	defer limit.mux.Unlock()
+
+	now := time.Now()
+
+	updateLimitCounters(limit, now)
+
+	limit.minuteCount++
+	limit.hourCount++
+	limit.dayCount++
+	limit.lastRequest = now
+}
+
+func getModelByName(modelName string) (Model, bool) {
+	for _, model := range Models {
+		if model.Name == modelName {
+			incrementRateLimit(modelName)
+
 			return model, true
 		}
 	}
@@ -174,7 +219,7 @@ func (h *ProxyHandler) getModelByName(name string) (Model, bool) {
 	return Model{}, false
 }
 
-func calculateRequestLength(requestBody schema.RequestOpenAICompatable) int {
+func getRequestLength(requestBody schema.RequestOpenAICompatable) int {
 	var res int
 
 	for _, v := range requestBody.Messages {
@@ -184,44 +229,81 @@ func calculateRequestLength(requestBody schema.RequestOpenAICompatable) int {
 	return res
 }
 
-func (h *ProxyHandler) sendRequestToLLM(modelName string, requestBody schema.RequestOpenAICompatable) ([]byte, error) {
+// func sendRequestToLLM(modelName string, requestBody schema.RequestOpenAICompatable) ([]byte, error) {
+func sendRequestToLLM(modelName string, requestBody []byte) ([]byte, error) {
 	var resp []byte
 
 	var err error
 
-	fmt.Printf("Request to model: %s - %s\n", modelName, printFirstChars(requestBody.Messages[0].Content))
+	log.Printf("Request to model: %s - %s\n", modelName, printFirstChars(gjson.GetBytes(requestBody, "messages.0.content").String()))
 
-	model, found := h.getModelByName(modelName)
+	model, found := getModelByName(modelName)
 	if !found {
 		return nil, fmt.Errorf("Specified model not found - %s", modelName)
 	}
 
 	switch model.Provider {
-	case "Cloudflare":
+	case "cloudflare":
 		resp, err = openai.Call(model.URL, "@"+model.Name, model.Token, requestBody)
-	case "Google":
+	case "google":
 		resp, err = gemini.Call(model.URL, model.Name, model.Token, requestBody)
 	case "groq", "arliai", "github":
 		resp, err = openai.Call(model.URL, strings.TrimPrefix(model.Name, model.Provider+"/"), model.Token, requestBody)
-
+	case "cohere":
+		resp, err = openai.Call(model.URL, strings.TrimPrefix(model.Name, model.Provider+"/"), model.Token, requestBody)
+		if err == nil {
+			response := schema.ResponseOpenAICompatable{
+				Model: model.Name,
+				Choices: []struct {
+					Index   int `json:"index,omitempty"`
+					Message struct {
+						Role    string `json:"role,omitempty"`
+						Content string `json:"content,omitempty"`
+					} `json:"message,omitempty"`
+					FinishReason string `json:"finish_reason,omitempty"`
+				}{
+					{
+						Index: 0,
+						Message: struct {
+							Role    string `json:"role,omitempty"`
+							Content string `json:"content,omitempty"`
+						}{
+							Role:    "assistant",
+							Content: gjson.GetBytes(resp, "message.content.0.text").String(),
+						},
+						FinishReason: "stop",
+					},
+				},
+			}
+			resp, err = json.Marshal(response)
+		}
 	default:
 		resp, err = openai.Call(model.URL, strings.TrimPrefix(model.Name, model.Provider+"/"), model.Token, requestBody)
 	}
 
 	if err != nil {
-		fmt.Printf("ERROR: %s, body: %s\n", err, string(resp))
+		log.Printf("ERROR: %s, body: %s\n", err, string(resp))
 
 		return nil, err
 	}
 
-	fmt.Printf("Response: %s\n", printFirstChars(string(resp)))
+	if resp == nil {
+		return nil, fmt.Errorf("No response from LLM")
+	}
+
+	content := gjson.GetBytes(resp, "choices.0.message.content").String()
+	log.Printf("Response: %s\n", printFirstChars(cmp.Or(content, string(resp))))
+
+	if len(content) == 0 {
+		return nil, fmt.Errorf("no content")
+	}
 
 	return resp, nil
 }
 
 func printFirstChars(data string) string {
 	if len(data) > 100 {
-		return data[:100]
+		return strings.TrimSpace(data[:100])
 	}
 
 	return data

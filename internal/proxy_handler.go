@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +63,12 @@ func HandlerTxt(w http.ResponseWriter, req *http.Request) {
 	reqBodyBytes, err := io.ReadAll(req.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+
+		return
+	}
+
+	if !gjson.ValidBytes(reqBodyBytes) {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 
 		return
 	}
@@ -131,7 +136,9 @@ func setMaxLimitMinute(modelName string) {
 }
 
 func selectModel(modelSize string, requestLength int) string {
-	availableModels := make([]Model, 0, len(Models))
+	var selectedModel *Model
+
+	var selectedLastRequest time.Time
 
 	for _, model := range Models {
 		if model.Size != modelSize {
@@ -148,28 +155,33 @@ func selectModel(modelSize string, requestLength int) string {
 		if limit.minuteCount < model.RequestsPerMin &&
 			limit.hourCount < model.RequestsPerHour &&
 			limit.dayCount < model.RequestsPerDay {
-			availableModels = append(availableModels, model)
+			// Select the model with the lowest priority
+			// If priorities are equal, select the one with the earliest lastRequest
+			if selectedModel == nil {
+				selectedModel = &model
+				selectedLastRequest = limit.lastRequest
+			} else if model.Priority < selectedModel.Priority {
+				selectedModel = &model
+				selectedLastRequest = limit.lastRequest
+			} else if model.Priority == selectedModel.Priority {
+				// && limit.lastRequest.Before(selectedLastRequest) {
+				if limit.lastRequest.Before(time.Now().Add(-time.Hour)) && selectedLastRequest.Before(time.Now().Add(-time.Hour)) &&
+					model.MaxRequestLength < selectedModel.MaxRequestLength {
+					selectedModel = &model
+					selectedLastRequest = limit.lastRequest
+				} else if limit.lastRequest.Before(selectedLastRequest) {
+					selectedModel = &model
+					selectedLastRequest = limit.lastRequest
+				}
+			}
 		}
 
 		limit.mux.Unlock()
 	}
 
-	if len(availableModels) == 0 {
-		log.Printf("No available models %s for this request length = %d", modelSize, requestLength)
-
+	if selectedModel == nil {
 		return ""
 	}
-
-	sort.Slice(availableModels, func(i, j int) bool {
-		// First sort by Priority
-		if availableModels[i].Priority != availableModels[j].Priority {
-			return availableModels[i].Priority < availableModels[j].Priority
-		}
-		// If Priority is the same, sort by lastRequest
-		return RateLimits[availableModels[i].Name].lastRequest.Before(RateLimits[availableModels[j].Name].lastRequest)
-	})
-
-	selectedModel := availableModels[0]
 
 	return selectedModel.Name
 }
@@ -245,7 +257,7 @@ func sendRequestToLLM(modelName string, requestBody []byte) ([]byte, error) {
 	switch model.Provider {
 	case "cloudflare":
 		resp, err = openai.Call(model.URL, "@"+model.Name, model.Token, requestBody)
-	case "google":
+	case "google": // todo change on openai.Call - https://developers.googleblog.com/en/gemini-is-now-accessible-from-the-openai-library/
 		resp, err = gemini.Call(model.URL, model.Name, model.Token, requestBody)
 	case "groq", "arliai", "github":
 		resp, err = openai.Call(model.URL, strings.TrimPrefix(model.Name, model.Provider+"/"), model.Token, requestBody)

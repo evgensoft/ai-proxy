@@ -48,11 +48,25 @@ func ping(w http.ResponseWriter, req *http.Request) {
 }
 
 func listModels(w http.ResponseWriter, req *http.Request) {
-	var models []string
+	type Data struct {
+		ID string `json:"id"`
+	}
+
+	type Models struct {
+		Object string `json:"object"`
+		Data   []Data `json:"data"`
+	}
+
+	var models Models
+
+	models.Object = "list"
 
 	for _, v := range internal.Models {
-		models = append(models, v.Name)
+		models.Data = append(models.Data, Data{ID: v.Name})
 	}
+
+	models.Data = append(models.Data, Data{ID: "SMALL"})
+	models.Data = append(models.Data, Data{ID: "BIG"})
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(models)
@@ -75,15 +89,11 @@ func main() {
 	for _, v := range config.Models {
 		internal.Models = append(internal.Models, v)
 		internal.RateLimits[v.Name] = &internal.RateLimit{}
+
 		log.Println("Load model ", v.Name)
 	}
 
 	log.Printf("Listening on port %d", *port)
-
-	// handler, err := internal.NewProxyHandler(config)
-	// if err != nil {
-	// 	log.Fatalf("Error creating proxy handler: %v", err)
-	// }
 
 	mux := http.NewServeMux()
 	// Register the middleware

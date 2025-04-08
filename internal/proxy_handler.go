@@ -16,6 +16,7 @@ import (
 	"ai-proxy/internal/schema"
 
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 type RateLimit struct {
@@ -308,6 +309,21 @@ func sendRequestToLLM(modelName string, requestBody []byte) ([]byte, error) {
 
 	if len(content) == 0 {
 		return nil, fmt.Errorf("no content")
+	}
+
+	// replace block </think> in DeepSeek-R1
+	if strings.Contains(model.Name, "DeepSeek-R1") {
+		thinkTag := "</think>"
+
+		index := strings.Index(content, thinkTag)
+		if index != -1 {
+			content = content[index+len(thinkTag):]
+
+			resp, err = sjson.SetBytes(resp, "choices.0.message.content", content)
+			if err != nil {
+				return nil, fmt.Errorf("error sjson.SetBytes in replace think: %w", err)
+			}
+		}
 	}
 
 	return resp, nil

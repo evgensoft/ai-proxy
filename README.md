@@ -4,14 +4,14 @@
 # Proxy for LLM Providers
 
 ## Overview
-This service acts as a proxy for various Large Language Model (LLM) providers, including OpenAI. It allows users to seamlessly interact with multiple LLMs through a unified API, simplifying the process of integrating AI capabilities into applications. The proxy handles requests, manages authentication, and provides a consistent interface for different LLM providers.
+This service acts as a proxy for various Large Language Model (LLM) providers, including OpenAI, Groq, HuggingFace, and others. It allows users to seamlessly interact with multiple LLMs through a unified API, simplifying integration and request management.
 
 ## Features
-- **Unified API**: Interact with multiple LLM providers using a single API endpoint.
+- **Unified API**: Work with multiple LLM providers using a single API endpoint.
 - **Provider Flexibility**: Easily switch between different LLM providers without changing your application code.
-- **Request Management**: Handles request formatting, authentication, and error management.
-- **Rate Limiting**: Implement rate limiting to manage usage across different providers.
-- **Logging and Monitoring**: Track usage and performance metrics for each provider.
+- **Request Management**: Handles authentication, routing, and error handling.
+- **Rate Limiting**: Supports per-model request limits (minute/hour/day).
+- **Simple Configuration**: YAML-based setup with support for multiple models.
 
 ## Getting Started
 
@@ -27,17 +27,30 @@ cd ai-proxy
 ```
 
 ### Configuration
-Create a `.env` file in the root directory and add your LLM provider API keys:
-```plaintext
-OPENAI_API_KEY=your_openai_api_key
-GROQ_TOKEN=your_groq_api_key
-CLOUDFLARE_TOKEN=your_cloudflare_api_key
-GEMINI_TOKEN=your_google_api_key
+
+Create a file named `config.yaml` in the root directory. Below is a **minimal working example** with one provider:
+
+```yaml
+models:
+  - name: groq/llama-3.2-90b-vision-preview
+    provider: groq
+    priority: 1
+    requests_per_minute: 10
+    requests_per_hour: 100
+    requests_per_day: 3500
+    url: "https://api.groq.com/openai/v1/chat/completions"
+    token: "your_groq_api_token"
+    max_request_length: 128000
+    model_size: BIG
 ```
-You can use a package like `godotenv` to load environment variables from the `.env` file.
+
+> ✅ You can list multiple models from different providers in the same file.  
+> 🛡️ Sensitive values like API tokens should be stored securely.
 
 ### Running the Service
+
 To start the proxy server, run:
+
 ```bash
 go run main.go
 ```
@@ -50,13 +63,12 @@ Replace `9090` with your desired port number.
 ## Example Usage
 
 ### Using cURL
-You can also use `cURL` to interact with the proxy service. Here is an example:
 
 ```bash
-curl -X POST http://localhost:8080/groq/chat/completions \
+curl -X POST http://localhost:8080/chat/completions \
      -H "Content-Type: application/json" \
-     -H "Authorization: Bearer YOUR_GROQ_TOKEN" \
      -d '{
+           "model": "groq/llama-3.2-90b-vision-preview",
            "messages": [
              {
                "role": "system",
@@ -66,11 +78,9 @@ curl -X POST http://localhost:8080/groq/chat/completions \
                "role": "user",
                "content": "Tell me a joke."
              }
-           ],
-           "model": "llama-3.1-70b-versatile"
+           ]
          }'
 ```
-Replace `YOUR_GROQ_TOKEN` with your actual GROQ API token.
 
 ## Contributing
 Contributions are welcome! Please submit a pull request or open an issue to discuss improvements.

@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"ai-proxy/internal"
+	"ai-proxy/internal/gigachat"
 
 	"gopkg.in/yaml.v3"
 )
@@ -90,6 +91,10 @@ func main() {
 		internal.Models = append(internal.Models, v)
 		internal.RateLimits[v.Name] = &internal.RateLimit{}
 
+		if v.Provider == "gigachat" {
+			gigachat.InitClient(v.Token)
+		}
+
 		log.Println("Load model ", v.Name)
 	}
 
@@ -98,7 +103,7 @@ func main() {
 	mux := http.NewServeMux()
 	// Register the middleware
 	// mux.HandleFunc("/", authMiddleware(handleHTTP))
-	mux.HandleFunc("/", internal.HandlerTxt)
+	mux.HandleFunc("/chat/completions", internal.HandlerTxt)
 	mux.HandleFunc("/image", internal.HandlerImage)
 	mux.HandleFunc("/ping", ping)
 	mux.HandleFunc("/models", listModels)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"ai-proxy/internal/gemini"
+	"ai-proxy/internal/gigachat"
 	"ai-proxy/internal/openai"
 	"ai-proxy/internal/schema"
 
@@ -55,7 +56,7 @@ func HandlerTxt(w http.ResponseWriter, req *http.Request) {
 		err                  error
 	)
 
-	if req.Method != http.MethodPost || !strings.Contains(req.RequestURI, "chat/completions") {
+	if req.Method != http.MethodPost {
 		http.Error(w, "", http.StatusServiceUnavailable)
 
 		return
@@ -260,6 +261,8 @@ func sendRequestToLLM(modelName string, requestBody []byte) ([]byte, error) {
 		resp, err = openai.Call(model.URL, "@"+model.Name, model.Token, requestBody)
 	case "google": // todo change on openai.Call - https://developers.googleblog.com/en/gemini-is-now-accessible-from-the-openai-library/
 		resp, err = gemini.Call(model.URL, model.Name, model.Token, requestBody)
+	case "gigachat":
+		resp, err = gigachat.Call(model.URL, strings.TrimPrefix(model.Name, model.Provider+"/"), model.Token, requestBody)
 	case "groq", "arliai", "github":
 		resp, err = openai.Call(model.URL, strings.TrimPrefix(model.Name, model.Provider+"/"), model.Token, requestBody)
 	case "cohere":

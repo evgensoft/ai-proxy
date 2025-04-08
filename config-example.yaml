@@ -1,0 +1,74 @@
+# curl https://127.0.0.1:8080/chat/completions \
+#   -d '{
+#   "model": "groq/llama-3.2-90b-vision-preview",
+#   "messages": [
+#     {"role": "user", "content": "What is the meaning of life?"}
+#   ]
+# }'
+models:
+  # gigachat корп. доступ
+  # список моделей - https://developers.sber.ru/docs/ru/gigachat/models
+  # в token прописывается clientID и clientSecret через двоеточие, сам токен живет 30 мин - обновляется автоматом
+  # url не используется (запросы через библиотеку)
+  - name: gigachat/GigaChat
+    provider: gigachat
+    priority: 1
+    requests_per_minute: 60
+    requests_per_hour: 50000
+    requests_per_day: 1000000
+    url: "https://gigachat.devices.sberbank.ru/api/v1"
+    token: "clientID:clientSecret"
+    max_request_length: 32768
+    model_size: SMALL
+
+     
+  # https://huggingface.co/docs/api-inference/supported-models
+  # https://huggingface.co/models?inference=warm&sort=trending - list models
+  # only 1,000 requests per day for all models
+  - name: huggingface/Mistral-Nemo-Instruct-2407
+    provider: huggingface
+    priority: 2
+    requests_per_minute: 50
+    requests_per_hour: 1000
+    requests_per_day: 1000
+    url: "https://api-inference.huggingface.co/models/mistralai/Mistral-Nemo-Instruct-2407/v1/chat/completions"
+    token: "HF_TOKEN"
+    max_request_length: 32768
+    model_size: SMALL
+    
+# https://console.groq.com/docs/models
+# https://console.groq.com/settings/limits
+  - name: groq/llama-3.2-90b-vision-preview
+    provider: groq
+    priority: 1
+    requests_per_minute: 10
+    requests_per_hour: 100
+    requests_per_day: 3500
+    url: "https://api.groq.com/openai/v1/chat/completions"
+    token: "groq_token"
+    max_request_length: 128000
+    model_size: BIG
+
+# https://openrouter.ai/models
+  - name: deepseek/deepseek-chat:free
+    provider: openrouter
+    priority: 1
+    requests_per_minute: 20
+    requests_per_hour: 100
+    requests_per_day: 200
+    url: "https://openrouter.ai/api/v1/chat/completions"
+    token: "poenrouter_token"
+    max_request_length: 131072
+    model_size: BIG
+
+# https://glama.ai/models - роутер с кучей моделей
+  - name: glama/gemini-2.0-flash-thinking-exp-01-21
+    provider: glama
+    priority: 1
+    requests_per_minute: 100
+    requests_per_hour: 3000
+    requests_per_day: 10000
+    url: "https://glama.ai/api/gateway/openai/v1/chat/completions"
+    token: "glama-token"
+    max_request_length: 32000
+    model_size: SMALL

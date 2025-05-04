@@ -77,6 +77,11 @@ func HandlerTxt(w http.ResponseWriter, req *http.Request) {
 
 	modelName = gjson.GetBytes(reqBodyBytes, "model").String()
 
+	// Replace stream = false
+	if gjson.GetBytes(reqBodyBytes, "stream").Bool() {
+		reqBodyBytes, _ = sjson.SetBytes(reqBodyBytes, "stream", false)
+	}
+
 	if len(modelName) < 10 {
 		if modelName != "BIG" {
 			modelSize = "SMALL"

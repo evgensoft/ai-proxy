@@ -57,5 +57,12 @@ func Call(providerURL, model, token string, requestBody []byte) ([]byte, error) 
 		time.Sleep(time.Until(lastTimeRequest.Add(maxTimeoutTime)))
 	}
 
-	return gigachatClient.SendBytes(reqBody)
+	resp, err := gigachatClient.SendBytes(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Resp from Gigachat - %s", resp)
+
+	return ConvertGigaChatResponseToOpenAI(resp, model, true)
 }

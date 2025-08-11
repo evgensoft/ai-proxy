@@ -7,8 +7,8 @@ WORKDIR /app
 # Copy the package files to the container
 COPY ./ ./
 
-# Build the Go binary
-RUN go build -o /app/ai-proxy
+# Собираем бинарник статически
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /app/ai-proxy main.go
 
 # Stage 2: Use a smaller base image
 FROM alpine:latest

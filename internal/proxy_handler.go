@@ -319,18 +319,14 @@ func sendRequestToLLM(modelName string, requestBody []byte) ([]byte, error) {
 		return nil, fmt.Errorf("no content")
 	}
 
-	// replace block </think> in DeepSeek-R1
-	if strings.Contains(model.Name, "DeepSeek-R1") {
-		thinkTag := "</think>"
+	// replace block <think>...</think> in reasoning models
+	index := strings.Index(content, "</think>")
+	if index != -1 {
+		content = content[index+len("</think>"):]
 
-		index := strings.Index(content, thinkTag)
-		if index != -1 {
-			content = content[index+len(thinkTag):]
-
-			resp, err = sjson.SetBytes(resp, "choices.0.message.content", content)
-			if err != nil {
-				return nil, fmt.Errorf("error sjson.SetBytes in replace think: %w", err)
-			}
+		resp, err = sjson.SetBytes(resp, "choices.0.message.content", strings.TrimSpace(content))
+		if err != nil {
+			return nil, fmt.Errorf("error sjson.SetBytes in replace think: %w", err)
 		}
 	}
 
